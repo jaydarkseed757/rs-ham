@@ -54,6 +54,8 @@ enum Mode {
     AtariSt,
     Sms,
     Atari2600,
+    Pc88,
+    Pc98,
 }
 
 impl Mode {
@@ -81,6 +83,8 @@ impl Mode {
             "st" | "atarist"            => Some(Mode::AtariSt),
             "sms" | "mastersystem"      => Some(Mode::Sms),
             "2600" | "atari2600"        => Some(Mode::Atari2600),
+            "pc88" | "pc-88" | "pc8801" => Some(Mode::Pc88),
+            "pc98" | "pc-98" | "pc9801" => Some(Mode::Pc98),
             _ => None,
         }
     }
@@ -109,6 +113,8 @@ impl Mode {
             Mode::AtariSt        => 16,   // 16 from RGB333 (512 possible)
             Mode::Sms            => 32,   // 32 of 64 possible RGB222 colors
             Mode::Atari2600      => 128,  // fixed NTSC TIA hardware palette
+            Mode::Pc88           => 8,    // fixed digital RGB (3-bit, 8 colors)
+            Mode::Pc98           => 16,   // 16 from RGB444 (4,096 possible)
         }
     }
 
@@ -136,6 +142,8 @@ impl Mode {
             Mode::AtariSt        => "Atari ST  — Low-res, 16 colors from RGB333 (512 possible)",
             Mode::Sms            => "SMS       — Sega Master System VDP, 32 colors, RGB222 (64 possible)",
             Mode::Atari2600      => "Atari 2600 — TIA, fixed 128-color NTSC palette",
+            Mode::Pc88           => "PC-88     — NEC PC-8801, fixed 8-color digital RGB, 640×200",
+            Mode::Pc98           => "PC-98     — NEC PC-9801, 16 colors from RGB444 (4,096 possible), 640×400",
         }
     }
 
@@ -150,6 +158,8 @@ impl Mode {
             Mode::Hercules => (720, 348),
             Mode::Spectrum | Mode::Msx | Mode::Sms => (256, 192),
             Mode::Atari2600 => (160, 192),
+            Mode::Pc88      => (640, 200),
+            Mode::Pc98      => (640, 400),
             _              => (320, 200),   // Amiga + CGA/EGA/VGA/C64/AtariSt
         }
     }
@@ -205,6 +215,8 @@ impl Mode {
             Mode::AtariSt        => "atarist",
             Mode::Sms            => "sms",
             Mode::Atari2600      => "atari2600",
+            Mode::Pc88           => "pc88",
+            Mode::Pc98           => "pc98",
         }
     }
 
@@ -215,7 +227,8 @@ impl Mode {
           Mode::Cga, Mode::Ega, Mode::Vga,
           Mode::Genesis, Mode::Tg16, Mode::Snes,
           Mode::Nes, Mode::GameBoy, Mode::Hercules, Mode::C64,
-          Mode::Spectrum, Mode::Msx, Mode::AtariSt, Mode::Sms, Mode::Atari2600]
+          Mode::Spectrum, Mode::Msx, Mode::AtariSt, Mode::Sms, Mode::Atari2600,
+          Mode::Pc88, Mode::Pc98]
     }
 }
 
@@ -469,6 +482,22 @@ fn atari2600_palette() -> Vec<(u8, u8, u8)> {
         // Hue F: Yellow-Gold
         ( 41, 46,  0),( 66, 70,  0),( 92, 96,  0),(114,119,  0),
         (140,145,  0),(163,168,  0),(189,194,  0),(212,217,  0),
+    ]
+}
+
+/// NEC PC-8801 — fixed 8-color digital RGB palette.
+/// Each channel is either 0 or 255 (1-bit per channel), giving exactly 8 colors.
+/// This matches the digital RGB output of the PC-8801 and compatible hardware.
+fn pc88_palette() -> Vec<(u8, u8, u8)> {
+    vec![
+        (  0,   0,   0),  // Black
+        (  0,   0, 255),  // Blue
+        (255,   0,   0),  // Red
+        (255,   0, 255),  // Magenta
+        (  0, 255,   0),  // Green
+        (  0, 255, 255),  // Cyan
+        (255, 255,   0),  // Yellow
+        (255, 255, 255),  // White
     ]
 }
 
@@ -1237,6 +1266,12 @@ fn dispatch_encode(img: &RgbImage, palette: &[(u8, u8, u8)], mode: Mode, dither:
         // ZX Spectrum: attribute-clash block encoder (brightness-group constrained)
         (Mode::Spectrum,        true ) => (simulate_spectrum_dither(img),                        SimResult::Palette),
         (Mode::Spectrum,        false) => (simulate_spectrum(img),                               SimResult::Palette),
+        // PC-98: 16 colors from RGB444 (same 4-bit pipeline as Palette16/CGA/EGA)
+        (Mode::Pc98,            true ) => (simulate_palette_n_dither(img, palette, 4, to_8bit4), SimResult::Palette),
+        (Mode::Pc98,            false) => (simulate_palette_n(img, palette, 4, to_8bit4),        SimResult::Palette),
+        // PC-88: fixed 8-color digital RGB, full 8-bit palette
+        (Mode::Pc88,            true ) => (simulate_palette_n_dither(img, palette, 0, |c| c),    SimResult::Palette),
+        (Mode::Pc88,            false) => (simulate_palette_n(img, palette, 0, |c| c),           SimResult::Palette),
     }
 }
 
@@ -1257,6 +1292,7 @@ fn mode_palette(img: &RgbImage, mode: Mode) -> Vec<(u8, u8, u8)> {
         Mode::Spectrum => spectrum_palette(),   // display only; simulation hardcodes groups
         Mode::Msx      => msx_palette(),
         Mode::Atari2600 => atari2600_palette(),
+        Mode::Pc88     => pc88_palette(),
         _ => {
             let shift = match mode {
                 Mode::Ham8 | Mode::Vga                     => 2,
@@ -1275,7 +1311,8 @@ fn mode_palette(img: &RgbImage, mode: Mode) -> Vec<(u8, u8, u8)> {
 fn builds_palette_from_image(mode: Mode) -> bool {
     !matches!(mode,
         Mode::Sham | Mode::Cga | Mode::Ega | Mode::Nes | Mode::GameBoy |
-        Mode::Hercules | Mode::C64 | Mode::Spectrum | Mode::Msx | Mode::Atari2600)
+        Mode::Hercules | Mode::C64 | Mode::Spectrum | Mode::Msx | Mode::Atari2600 |
+        Mode::Pc88)
 }
 
 /// Build palette + encode for one mode — no timing overhead. Used by `--all`.
@@ -1363,6 +1400,8 @@ fn print_usage(prog: &str) {
     eprintln!("  atarist   Atari ST    16 colors from RGB333, 320×200");
     eprintln!("  sms       Sega SMS    32 colors from RGB222, 256×192");
     eprintln!("  atari2600 Atari 2600  fixed 128-color NTSC TIA palette, 160×192");
+    eprintln!("  pc88      NEC PC-88   fixed 8-color digital RGB palette, 640×200");
+    eprintln!("  pc98      NEC PC-98   16 colors from RGB444 (4,096 possible), 640×400");
     eprintln!();
     eprintln!("  --dither     Floyd-Steinberg error diffusion (applies to all non-HAM modes)");
     eprintln!("  --res        Downscale to each mode's native resolution, upscale output to 1920×1080");
@@ -1588,6 +1627,7 @@ fn main() {
         Mode::Spectrum => eprintln!("  Palette:       fixed — ZX Spectrum ULA (15 colors, ink/paper per 8×8 block)"),
         Mode::Msx      => eprintln!("  Palette:       fixed — MSX TMS9918A hardware (15 colors)"),
         Mode::Atari2600 => eprintln!("  Palette:       fixed — Atari 2600 TIA NTSC hardware (128 colors)"),
+        Mode::Pc88      => eprintln!("  Palette:       fixed — PC-88 digital RGB (8 colors)"),
         _              => eprintln!("  Palette build: {:.1} ms", pal_ms),
     }
     eprintln!("  Encode:        {:.1} ms  ({:.0} lines/s, {:.2} Mpx/s)",
